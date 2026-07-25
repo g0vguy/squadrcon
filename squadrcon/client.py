@@ -1,4 +1,5 @@
 import itertools
+import queue
 import socket
 import threading
 import time
@@ -30,9 +31,11 @@ class Rcon:
         self.emitter = EventEmitter()
         self.sock = None
         self.buffer = b""
-        self.lock = threading.Lock()
+        self.send_lock = threading.Lock()
         self.closed = True
         self.reader_thread = None
+        self._pending = {}
+        self._pending_lock = threading.Lock()
         self._connect()
 
     def _connect(self):
@@ -44,7 +47,7 @@ class Rcon:
         auth_id = next(_ids)
         sock.sendall(protocol.encode_packet(auth_id, protocol.AUTH, self.config.password))
 
-        pkt = self._read_packet()
+        pkt = self._read_packet_direct()
         if pkt is None or pkt.id == -1:
             self.close()
             raise RconAuthError("auth failed, check rcon password")
@@ -64,7 +67,9 @@ class Rcon:
                 pass
         self.emitter.emit(events.CLOSE)
 
-    def _read_packet(self):
+    def _read_packet_direct(self):
+        """Used only during the initial auth handshake, before the
+        reader thread exists, so there's no other reader to race with."""
         while True:
             pkt, self.buffer = protocol.try_decode_packet(self.buffer)
             if pkt is not None:
@@ -78,19 +83,38 @@ class Rcon:
             self.buffer += chunk
 
     def _reader_loop(self):
+        """The only thread that ever reads the socket after auth.
+        Command responses get routed to the waiting queue in
+        _pending; anything else is an unsolicited broadcast line
+        (chat, kicks, bans, warns) and gets parsed and emitted."""
         while not self.closed:
             try:
-                pkt = self._read_packet()
-            except Exception as exc:
+                pkt, self.buffer = protocol.try_decode_packet(self.buffer)
+                if pkt is None:
+                    chunk = self.sock.recv(4096)
+                    if not chunk:
+                        if self.closed:
+                            break
+                        raise ConnectionError("socket closed by remote")
+                    self.buffer += chunk
+                    continue
+            except (socket.timeout, OSError) as exc:
+                if self.closed:
+                    break
                 self.emitter.emit(events.ERROR, exc)
                 if self.config.auto_reconnect:
                     self._reconnect()
                     continue
                 break
+            except Exception as exc:
+                self.emitter.emit(events.ERROR, exc)
+                break
 
-            if pkt is None:
-                if self.closed:
-                    break
+            with self._pending_lock:
+                q = self._pending.get(pkt.id)
+
+            if q is not None:
+                q.put(pkt)
                 continue
 
             if pkt.body:
@@ -109,30 +133,51 @@ class Rcon:
         except Exception as exc:
             self.emitter.emit(events.ERROR, exc)
 
-    def execute(self, command):
+    def execute(self, command, timeout=None):
         if self.sock is None or self.closed:
             raise RconAuthError("not connected")
 
+        timeout = timeout or self.config.timeout
         req_id = next(_ids)
-        with self.lock:
-            self.sock.sendall(protocol.encode_packet(req_id, protocol.EXEC, command))
-            raw = self._collect(req_id)
+        marker_id = next(_ids)
+
+        q = queue.Queue()
+        marker_q = queue.Queue()
+        with self._pending_lock:
+            self._pending[req_id] = q
+            self._pending[marker_id] = marker_q
+
+        try:
+            with self.send_lock:
+                self.sock.sendall(protocol.encode_packet(req_id, protocol.EXEC, command))
+                self.sock.sendall(protocol.encode_packet(marker_id, protocol.EXEC, ""))
+
+            chunks = []
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    pkt = q.get(timeout=min(remaining, 0.1))
+                    chunks.append(pkt.body)
+                    continue
+                except queue.Empty:
+                    pass
+                try:
+                    marker_q.get_nowait()
+                    break
+                except queue.Empty:
+                    continue
+
+            raw = "".join(chunks)
+        finally:
+            with self._pending_lock:
+                self._pending.pop(req_id, None)
+                self._pending.pop(marker_id, None)
 
         self._dispatch(command, raw)
         return raw
-
-    def _collect(self, req_id):
-        marker_id = next(_ids)
-        self.sock.sendall(protocol.encode_packet(marker_id, protocol.EXEC, ""))
-
-        chunks = []
-        while True:
-            pkt = self._read_packet()
-            if pkt is None or pkt.id == marker_id:
-                break
-            if pkt.id == req_id:
-                chunks.append(pkt.body)
-        return "".join(chunks)
 
     def _dispatch(self, command, raw):
         name = command.strip().split(" ", 1)[0]
