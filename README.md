@@ -75,6 +75,7 @@ More runnable examples are in [`examples/`](examples/):
 - [`basic_usage.py`](examples/basic_usage.py) — connect and list players
 - [`live_chat_logger.py`](examples/live_chat_logger.py) — stream chat/kick/ban events
 - [`auto_balance.py`](examples/auto_balance.py) — switch players to balance team sizes
+- [`discord_status.py`](examples/discord_status.py) — monitoring player count in server
 
 ## API overview
 
