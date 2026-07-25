@@ -1,6 +1,6 @@
 # squadrcon
 
-[![CI](https://github.com/yourname/squadrcon/actions/workflows/ci.yml/badge.svg)](https://github.com/yourname/squadrcon/actions/workflows/ci.yml)
+[![CI](https://github.com/g0vguy/squadrcon/actions/workflows/ci.yml/badge.svg)](https://github.com/g0vguy/squadrcon/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/squadrcon.svg)](https://pypi.org/project/squadrcon/)
 [![Python versions](https://img.shields.io/pypi/pyversions/squadrcon.svg)](https://pypi.org/project/squadrcon/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -26,7 +26,7 @@ pip install squadrcon
 From source:
 
 ```bash
-git clone https://github.com/yourname/squadrcon.git
+git clone https://github.com/g0vguy/squadrcon.git
 cd squadrcon
 pip install .
 ```
