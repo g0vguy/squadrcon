@@ -37,8 +37,8 @@ async def update_status():
         print(f"[-] failed to fetch player count: {exc}")
         try:
             rcon.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[-] error closing rcon: {exc}")
         try:
             rcon = await asyncio.to_thread(connect_rcon)
             print("[+] reconnected to rcon")
